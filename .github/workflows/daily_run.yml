@@ -1,0 +1,35 @@
+name: Daily Data Fetch
+
+on:
+  schedule:
+    # Runs at 10:30 UTC (which is 4:00 PM IST)
+    - cron: '30 10 * * *'
+  workflow_dispatch: # Allows you to click a button to run it manually
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install libraries
+        run: pip install pandas yfinance
+
+      - name: Run script
+        run: python update_data.py
+
+      - name: Commit and push if changes
+        run: |
+          git config --global user.name 'GitHub Actions'
+          git config --global user.email 'actions@github.com'
+          git add nifty_data.csv
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update data" && git push)
