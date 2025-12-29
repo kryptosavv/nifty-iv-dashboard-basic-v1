@@ -4,7 +4,7 @@ on:
   schedule:
     # Runs at 10:30 UTC (which is 4:00 PM IST)
     - cron: '30 10 * * *'
-  workflow_dispatch: # Allows you to click a button to run it manually
+  workflow_dispatch: # Allows manual trigger button
 
 permissions:
   contents: write
@@ -19,17 +19,32 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: '3.11' # Updated to 3.11 to fix the "|" error
 
       - name: Install libraries
         run: pip install pandas yfinance
 
       - name: Run script
-        run: python update_data.py
+        run: |
+          # 1. Force create the file so it exists for Git (prevents pathspec error)
+          touch nifty_data.csv
+          
+          # 2. Run the Python script (it will write data into that file)
+          python update_data.py
+          
+          # 3. Print file size for debugging logs
+          ls -l nifty_data.csv
 
       - name: Commit and push if changes
         run: |
           git config --global user.name 'GitHub Actions'
           git config --global user.email 'actions@github.com'
+          
+          # Force add the file (now guaranteed to exist)
           git add nifty_data.csv
+          
+          # Check status (helpful for logs)
+          git status
+          
+          # Commit only if there is actual new data
           git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update data" && git push)
