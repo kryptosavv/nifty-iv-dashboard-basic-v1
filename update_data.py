@@ -42,18 +42,19 @@ def get_atm_iv(ticker_obj, expiry, spot):
 def update_csv():
     print("🚀 Script Starting...")
 
-    # --- FIX FOR EMPTY DATA ERROR ---
-    # We check if file exists AND has content (> 0 bytes)
-    if os.path.exists(CSV_FILE) and os.path.getsize(CSV_FILE) > 0:
+    # --- SAFETY BLOCK: LOAD CSV ---
+    df = pd.DataFrame() # Start with empty
+    if os.path.exists(CSV_FILE):
         try:
+            # Try to read the file
             df = pd.read_csv(CSV_FILE)
             print(f"✅ Loaded existing CSV with {len(df)} rows.")
+        except pd.errors.EmptyDataError:
+            print("⚠️ File exists but is empty (created by touch). Starting fresh.")
+            df = pd.DataFrame() # Reset to empty
         except Exception as e:
-            print(f"⚠️ CSV readable error: {e}. Starting fresh.")
+            print(f"⚠️ Other error reading CSV: {e}. Starting fresh.")
             df = pd.DataFrame()
-    else:
-        print("⚠️ File is empty (created by touch). Starting fresh.")
-        df = pd.DataFrame()
 
     # --- FETCH DATA ---
     print("🔍 Fetching Market Data...")
@@ -75,7 +76,7 @@ def update_csv():
         print("✅ Data for this date already exists. Removing old row to retry options.")
         df = df[df['Date'] != latest_date]
 
-    # --- OPTIONS DATA (With Fail-Safe for Zeros) ---
+    # --- OPTIONS DATA ---
     try:
         monthly_expiries = get_monthly_expiries(nifty)
         if len(monthly_expiries) >= 3:
