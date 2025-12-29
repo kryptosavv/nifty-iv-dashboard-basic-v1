@@ -1,19 +1,10 @@
 import pandas as pd
 import yfinance as yf
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 import os
 
-# CONFIG
 CSV_FILE = "nifty_data.csv"
 TICKER = "^NSEI"
-COLUMNS = ["Date", "Spot", "ATM_Strike", "Avg_IV_Current_Month", "Avg_IV_Next_Month", "Avg_IV_Far_Month", "Straddle_Price"]
-
-def init_csv():
-    """Creates the CSV file with headers if it doesn't exist."""
-    if not os.path.exists(CSV_FILE):
-        print(f"⚠️ File {CSV_FILE} not found. Creating it with headers...")
-        df = pd.DataFrame(columns=COLUMNS)
-        df.to_csv(CSV_FILE, index=False)
 
 def get_monthly_expiries(ticker_obj):
     expiries = ticker_obj.options
@@ -38,64 +29,87 @@ def get_atm_iv(ticker_obj, expiry, spot):
         return 0
 
 def update_csv():
-    # 1. FORCE CREATE THE FILE (Fixes the "pathspec" error)
-    init_csv()
+    print("🚀 Script Starting...")
+    
+    # 1. LOAD or INIT DataFrame
+    if os.path.exists(CSV_FILE) and os.path.getsize(CSV_FILE) > 0:
+        try:
+            df = pd.read_csv(CSV_FILE)
+            print(f"✅ Loaded existing CSV with {len(df)} rows.")
+        except:
+            print("⚠️ CSV file corrupted or empty. Starting fresh.")
+            df = pd.DataFrame()
+    else:
+        print("⚠️ File is empty or missing. Creating new DataFrame.")
+        df = pd.DataFrame()
 
-    print("🚀 Starting Data Fetch...")
+    # 2. FETCH DATA
+    print("🔍 Fetching Market Data...")
     nifty = yf.Ticker(TICKER)
-    hist = nifty.history(period="5d") # Fetch 5 days to ensure we get something
+    # Get 5 days history to be safe
+    hist = nifty.history(period="5d")
     
     if hist.empty:
-        print("❌ Error: Yahoo Finance returned no data. File initialized but empty.")
+        print("❌ CRITICAL: Yahoo returned NO data. Script stopping.")
         return
 
-    latest_row = hist.iloc[-1]
-    latest_date = hist.index[-1].date()
-    spot = latest_row['Close']
-    
-    print(f"📊 Latest Market Data: {latest_date} | Spot: {spot:.2f}")
+    latest = hist.iloc[-1]
+    latest_date = str(hist.index[-1].date())
+    spot = latest['Close']
+    print(f"📊 Market Date: {latest_date} | Spot: {spot}")
 
-    # 2. Check duplicate
-    df = pd.read_csv(CSV_FILE)
-    if not df.empty and str(latest_date) in df['Date'].values:
-        print(f"✅ Data for {latest_date} already exists. No update needed.")
+    # 3. AVOID DUPLICATES
+    if not df.empty and 'Date' in df.columns and latest_date in df['Date'].values:
+        print("✅ Data for this date already exists. Exiting.")
         return
 
-    # 3. Fetch IVs
+    # 4. GET OPTIONS DATA
     try:
         monthly_expiries = get_monthly_expiries(nifty)
-        if len(monthly_expiries) < 3:
-            print("❌ Not enough expiries found.")
-            return
-
-        iv_curr = get_atm_iv(nifty, monthly_expiries[0], spot)
-        iv_next = get_atm_iv(nifty, monthly_expiries[1], spot)
-        iv_far  = get_atm_iv(nifty, monthly_expiries[2], spot)
-        
-        # Straddle
-        chain = nifty.option_chain(monthly_expiries[0])
-        strikes = chain.calls['strike']
-        atm_strike = strikes.iloc[(strikes - spot).abs().argsort()[:1]].iloc[0]
-        c_ltp = chain.calls[chain.calls['strike'] == atm_strike].iloc[0]['lastPrice']
-        p_ltp = chain.puts[chain.puts['strike'] == atm_strike].iloc[0]['lastPrice']
-        
-        new_row = {
-            "Date": str(latest_date),
-            "Spot": round(spot, 2),
-            "ATM_Strike": atm_strike,
-            "Avg_IV_Current_Month": round(iv_curr, 2),
-            "Avg_IV_Next_Month": round(iv_next, 2),
-            "Avg_IV_Far_Month": round(iv_far, 2),
-            "Straddle_Price": round(c_ltp + p_ltp, 2)
-        }
-        
-        # Save
-        df_new = pd.DataFrame([new_row])
-        df_new.to_csv(CSV_FILE, mode='a', header=df.empty, index=False)
-        print(f"💾 Success! Saved data for {latest_date}")
-        
+        if len(monthly_expiries) >= 3:
+            curr, next_exp, far_exp = monthly_expiries[:3]
+            iv_curr = get_atm_iv(nifty, curr, spot)
+            iv_next = get_atm_iv(nifty, next_exp, spot)
+            iv_far  = get_atm_iv(nifty, far_exp, spot)
+            
+            # Straddle Price
+            chain = nifty.option_chain(curr)
+            strikes = chain.calls['strike']
+            atm_strike = strikes.iloc[(strikes - spot).abs().argsort()[:1]].iloc[0]
+            c = chain.calls[chain.calls['strike'] == atm_strike].iloc[0]['lastPrice']
+            p = chain.puts[chain.puts['strike'] == atm_strike].iloc[0]['lastPrice']
+            straddle = c + p
+        else:
+            print("⚠️ Not enough expiries. Using 0.")
+            iv_curr, iv_next, iv_far, straddle, atm_strike = 0, 0, 0, 0, 0
     except Exception as e:
-        print(f"⚠️ Error calculating options data: {e}")
+        print(f"⚠️ Options Error: {e}. Using 0.")
+        iv_curr, iv_next, iv_far, straddle, atm_strike = 0, 0, 0, 0, 0
+
+    # 5. SAVE
+    new_row = {
+        "Date": latest_date,
+        "Spot": round(spot, 2),
+        "ATM_Strike": atm_strike,
+        "Avg_IV_Current_Month": round(iv_curr, 2),
+        "Avg_IV_Next_Month": round(iv_next, 2),
+        "Avg_IV_Far_Month": round(iv_far, 2),
+        "Straddle_Price": round(straddle, 2)
+    }
+    
+    # Append properly
+    df_new = pd.DataFrame([new_row])
+    if df.empty:
+        df_new.to_csv(CSV_FILE, index=False)
+    else:
+        # Check if columns match, if not, reset
+        if not set(new_row.keys()).issubset(df.columns):
+            print("⚠️ Schema changed. Overwriting file.")
+            df_new.to_csv(CSV_FILE, index=False)
+        else:
+            df_new.to_csv(CSV_FILE, mode='a', header=False, index=False)
+            
+    print(f"💾 SAVED SUCCESS: {latest_date} written to {CSV_FILE}")
 
 if __name__ == "__main__":
     update_csv()
