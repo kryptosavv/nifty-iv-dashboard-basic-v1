@@ -8,9 +8,7 @@ CSV_FILE = "nifty_data.csv"
 TICKER = "^NSEI"
 
 def get_ticker_with_headers():
-    """Creates a Yahoo Ticker with browser headers to bypass blocking"""
     session = requests.Session()
-    # Faking a standard Chrome browser
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     })
@@ -19,10 +17,7 @@ def get_ticker_with_headers():
 def get_monthly_expiries(ticker_obj):
     try:
         expiries = ticker_obj.options
-        if not expiries:
-            print("⚠️ Yahoo returned NO expiries (Empty List).")
-            return []
-            
+        if not expiries: return []
         expiry_dates = [datetime.strptime(d, "%Y-%m-%d").date() for d in expiries]
         monthly_map = {}
         for d in expiry_dates:
@@ -30,8 +25,7 @@ def get_monthly_expiries(ticker_obj):
             if key not in monthly_map or d > monthly_map[key]:
                 monthly_map[key] = d
         return [d.strftime("%Y-%m-%d") for d in sorted(monthly_map.values())]
-    except Exception as e:
-        print(f"⚠️ Error parsing expiries: {e}")
+    except:
         return []
 
 def get_atm_iv(ticker_obj, expiry, spot):
@@ -46,45 +40,51 @@ def get_atm_iv(ticker_obj, expiry, spot):
         return 0
 
 def update_csv():
-    print("🚀 Script Starting (Browser Mode)...")
-    
-    # 1. LOAD DataFrame
+    print("🚀 Script Starting...")
+
+    # --- FIX FOR EMPTY DATA ERROR ---
+    # We check if file exists AND has content (> 0 bytes)
     if os.path.exists(CSV_FILE) and os.path.getsize(CSV_FILE) > 0:
-        df = pd.read_csv(CSV_FILE)
+        try:
+            df = pd.read_csv(CSV_FILE)
+            print(f"✅ Loaded existing CSV with {len(df)} rows.")
+        except Exception as e:
+            print(f"⚠️ CSV readable error: {e}. Starting fresh.")
+            df = pd.DataFrame()
     else:
+        print("⚠️ File is empty (created by touch). Starting fresh.")
         df = pd.DataFrame()
 
-    # 2. FETCH DATA (With Headers)
+    # --- FETCH DATA ---
+    print("🔍 Fetching Market Data...")
     nifty = get_ticker_with_headers()
     
-    # Fetch Spot
     try:
         hist = nifty.history(period="5d")
-        if hist.empty: raise Exception("No history found")
+        if hist.empty: raise Exception("Yahoo returned no history")
         latest = hist.iloc[-1]
         latest_date = str(hist.index[-1].date())
         spot = latest['Close']
-        print(f"📊 Market Date: {latest_date} | Spot: {spot:.2f}")
+        print(f"📊 Date: {latest_date} | Spot: {spot:.2f}")
     except Exception as e:
-        print(f"❌ CRITICAL: Spot price fetch failed. {e}")
+        print(f"❌ Critical Error: {e}")
         return
 
-    # 3. CHECK FOR DUPLICATE
+    # Check for duplicate date
     if not df.empty and 'Date' in df.columns and latest_date in df['Date'].values:
-        print("✅ Data for this date already exists. Removing old row to re-try options fetch.")
-        df = df[df['Date'] != latest_date] # Remove it so we can try overwriting the 0s
+        print("✅ Data for this date already exists. Removing old row to retry options.")
+        df = df[df['Date'] != latest_date]
 
-    # 4. GET OPTIONS DATA
+    # --- OPTIONS DATA (With Fail-Safe for Zeros) ---
     try:
         monthly_expiries = get_monthly_expiries(nifty)
         if len(monthly_expiries) >= 3:
-            print(f"✅ Found Expiries: {monthly_expiries[:3]}")
             curr, next_exp, far_exp = monthly_expiries[:3]
             iv_curr = get_atm_iv(nifty, curr, spot)
             iv_next = get_atm_iv(nifty, next_exp, spot)
             iv_far  = get_atm_iv(nifty, far_exp, spot)
             
-            # Straddle Price
+            # Straddle
             chain = nifty.option_chain(curr)
             strikes = chain.calls['strike']
             atm_strike = strikes.iloc[(strikes - spot).abs().argsort()[:1]].iloc[0]
@@ -92,13 +92,13 @@ def update_csv():
             p = chain.puts[chain.puts['strike'] == atm_strike].iloc[0]['lastPrice']
             straddle = c + p
         else:
-            print("❌ Not enough expiries found (Yahoo Blocked?).")
+            print("⚠️ Yahoo returned empty expiries (BLOCKED). Saving 0s.")
             iv_curr, iv_next, iv_far, straddle, atm_strike = 0, 0, 0, 0, 0
     except Exception as e:
         print(f"⚠️ Options Error: {e}")
         iv_curr, iv_next, iv_far, straddle, atm_strike = 0, 0, 0, 0, 0
 
-    # 5. SAVE
+    # --- SAVE ---
     new_row = {
         "Date": latest_date,
         "Spot": round(spot, 2),
@@ -111,15 +111,14 @@ def update_csv():
     
     df_new = pd.DataFrame([new_row])
     
-    # Save Logic
     if df.empty:
         df_new.to_csv(CSV_FILE, index=False)
     else:
-        # Append
+        # Concatenate and save
         df = pd.concat([df, df_new], ignore_index=True)
         df.to_csv(CSV_FILE, index=False)
             
-    print(f"💾 SAVED: {latest_date} | IV: {iv_curr}% | Straddle: {straddle}")
+    print(f"💾 SAVED: {latest_date} | Spot: {spot} | Straddle: {straddle}")
 
 if __name__ == "__main__":
     update_csv()
