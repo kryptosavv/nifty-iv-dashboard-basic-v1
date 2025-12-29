@@ -1,18 +1,10 @@
 import pandas as pd
 import yfinance as yf
-import requests
 from datetime import date, datetime
 import os
 
 CSV_FILE = "nifty_data.csv"
 TICKER = "^NSEI"
-
-def get_ticker_with_headers():
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    })
-    return yf.Ticker(TICKER, session=session)
 
 def get_monthly_expiries(ticker_obj):
     try:
@@ -40,25 +32,26 @@ def get_atm_iv(ticker_obj, expiry, spot):
         return 0
 
 def update_csv():
-    print("🚀 Script Starting...")
+    print("🚀 Script Starting (Standard Mode)...")
 
     # --- SAFETY BLOCK: LOAD CSV ---
-    df = pd.DataFrame() # Start with empty
+    df = pd.DataFrame()
     if os.path.exists(CSV_FILE):
         try:
-            # Try to read the file
-            df = pd.read_csv(CSV_FILE)
-            print(f"✅ Loaded existing CSV with {len(df)} rows.")
-        except pd.errors.EmptyDataError:
-            print("⚠️ File exists but is empty (created by touch). Starting fresh.")
-            df = pd.DataFrame() # Reset to empty
+            if os.path.getsize(CSV_FILE) > 0:
+                df = pd.read_csv(CSV_FILE)
+                print(f"✅ Loaded existing CSV with {len(df)} rows.")
+            else:
+                print("⚠️ File exists but is empty (0 bytes). Starting fresh.")
         except Exception as e:
-            print(f"⚠️ Other error reading CSV: {e}. Starting fresh.")
+            print(f"⚠️ Error reading CSV: {e}. Starting fresh.")
             df = pd.DataFrame()
 
     # --- FETCH DATA ---
     print("🔍 Fetching Market Data...")
-    nifty = get_ticker_with_headers()
+    
+    # REVERTED TO STANDARD CALL (Fixes the curl_cffi error)
+    nifty = yf.Ticker(TICKER)
     
     try:
         hist = nifty.history(period="5d")
@@ -93,7 +86,7 @@ def update_csv():
             p = chain.puts[chain.puts['strike'] == atm_strike].iloc[0]['lastPrice']
             straddle = c + p
         else:
-            print("⚠️ Yahoo returned empty expiries (BLOCKED). Saving 0s.")
+            print("⚠️ Yahoo returned empty expiries. Saving 0s.")
             iv_curr, iv_next, iv_far, straddle, atm_strike = 0, 0, 0, 0, 0
     except Exception as e:
         print(f"⚠️ Options Error: {e}")
@@ -115,7 +108,6 @@ def update_csv():
     if df.empty:
         df_new.to_csv(CSV_FILE, index=False)
     else:
-        # Concatenate and save
         df = pd.concat([df, df_new], ignore_index=True)
         df.to_csv(CSV_FILE, index=False)
             
